@@ -28,7 +28,7 @@ This repository contains a production-grade CI/CD pipeline for deploying Azure i
 - `README.md`  
   This file, with setup and deployment instructions.
 
-## 3. Azure Setup (OIDC with Federated Credentials)
+## 3. Azure Setup (OIDC with Federated Credentials) (set secret in action)
 
 The pipeline uses GitHub-Azure OpenID Connect (OIDC) federation. You do **not** store Azure client secrets in GitHub; instead, GitHub presents a short-lived token.
 

@@ -11,7 +11,7 @@ This repository contains a production-grade CI/CD pipeline for deploying Azure i
 
 1. An Azure subscription where you have permission to create:
    - Resource groups
-   - Federated credentials on an Azure AD (Entra ID) application
+   - Federated credentials on an Azure AD (Entra ID) application (use enviornment entity)
 2. A GitHub repository with this code.
 3. `main` branch present (or configure your repo so that `main` is the default branch).
 

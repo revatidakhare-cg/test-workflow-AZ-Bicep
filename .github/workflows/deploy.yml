@@ -1,88 +1,114 @@
-name: CI/CD - Azure Deployment
+name: CI/CD - Azure Bicep
 
 on:
   push:
     branches:
       - main
+    paths:
+      - '.github/workflows/deploy.yml'
+      - 'infra/**'
+      - 'src/**'
+      - 'README.md'
   pull_request:
     branches:
       - main
+    paths:
+      - 'infra/**'
+      - 'src/**'
+      - '.github/workflows/deploy.yml'
 
 permissions:
   id-token: write
   contents: read
 
 env:
-  AZURE_LOCATION: westeurope
-  BICEP_FILE: infra/main.bicep
-  RESOURCE_GROUP_NAME: rg-sample-app-main
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  RESOURCE_GROUP_NAME: ${{ vars.RESOURCE_GROUP_NAME }}
+  LOCATION: ${{ vars.AZURE_LOCATION }}
 
 jobs:
   validate:
     name: Validate Bicep
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Azure CLI
-        run: |
-          az version
-          az bicep version
+        uses: azure/cli-action@v2
+        with:
+          azcliversion: latest
 
-      - name: Lint and build Bicep
-        run: |
-          az bicep version
-          az bicep build --file "${{ env.BICEP_FILE }}" --outfile /tmp/main.json
+      - name: Log in to Azure using OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Validate ARM template
+      - name: Validate Bicep template (build)
         run: |
-          # Basic JSON validation of the compiled template
-          cat /tmp/main.json | jq '.' > /dev/null
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+
+      - name: Validate deployment (what-if)
+        run: |
+          az group create \
+            --name "$RESOURCE_GROUP_NAME" \
+            --location "$LOCATION" \
+            --tags provisionedBy=github-actions \
+            --only-show-errors
+
+          az deployment group what-if \
+            --resource-group "$RESOURCE_GROUP_NAME" \
+            --template-file infra/main.bicep \
+            --parameters \
+              location="$LOCATION" \
+            --no-pretty-print \
+            --only-show-errors
 
   deploy:
     name: Deploy to Azure
-    needs: validate
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    environment:
-      name: production
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Azure Login (OIDC)
+      - name: Set up Azure CLI
+        uses: azure/cli-action@v2
+        with:
+          azcliversion: latest
+
+      - name: Log in to Azure using OIDC
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Ensure resource group exists
         run: |
           az group create \
-            --name "${{ env.RESOURCE_GROUP_NAME }}" \
-            --location "${{ env.AZURE_LOCATION }}"
+            --name "$RESOURCE_GROUP_NAME" \
+            --location "$LOCATION" \
+            --tags provisionedBy=github-actions \
+            --only-show-errors
 
-      - name: Build Bicep to ARM
-        run: |
-          az bicep build \
-            --file "${{ env.BICEP_FILE }}" \
-            --outfile /tmp/main.json
-
-      - name: Deploy infrastructure (what-if)
-        run: |
-          az deployment group what-if \
-            --resource-group "${{ env.RESOURCE_GROUP_NAME }}" \
-            --template-file /tmp/main.json \
-            --parameters \
-              location="${{ env.AZURE_LOCATION }}"
-
-      - name: Deploy infrastructure (create/update)
+      - name: Deploy Bicep template
         run: |
           az deployment group create \
-            --resource-group "${{ env.RESOURCE_GROUP_NAME }}" \
-            --template-file /tmp/main.json \
+            --resource-group "$RESOURCE_GROUP_NAME" \
+            --template-file infra/main.bicep \
             --parameters \
-              location="${{ env.AZURE_LOCATION }}" \
-            --mode Incremental
+              location="$LOCATION" \
+            --mode Incremental \
+            --only-show-errors
+
+      - name: Output deployment summary
+        run: |
+          echo "Deployment to resource group: $RESOURCE_GROUP_NAME in $LOCATION completed."

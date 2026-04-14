@@ -6,6 +6,7 @@ This repository contains a production-grade CI/CD pipeline for deploying Azure i
 - Cloud provider: Azure
 - IaC: Bicep (`infra/main.bicep`)
 - Default branch: `main`
+- -
 
 ## 1. Prerequisites
 

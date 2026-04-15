@@ -1,4 +1,4 @@
-name: CI/CD - Azure Bicep Deployment
+name: CI/CD - Azure Bicep
 
 on:
   push:
@@ -7,76 +7,101 @@ on:
     paths:
       - '.github/workflows/deploy.yml'
       - 'infra/**'
-      - 'parameters.json'
+      - 'src/**'
+      - 'README.md'
   pull_request:
     branches:
       - main
     paths:
       - '.github/workflows/deploy.yml'
       - 'infra/**'
-      - 'parameters.json'
+      - 'src/**'
 
 permissions:
   id-token: write
   contents: read
+  pull-requests: write
 
 env:
+  AZURE_LOCATION: westeurope
   AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
   AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-  RESOURCE_GROUP: my-rg
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  BICEP_FILE: infra/main.bicep
 
 jobs:
   validate:
     name: Validate Bicep Template
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Validate Bicep template
+      - name: Set up Azure CLI
         uses: azure/cli@v2
         with:
-          inlineScript: |
-            set -e
-            az bicep install
-            az bicep build --file infra/main.bicep
-            # Validation via what-if (no changes applied)
-            az deployment group what-if \
-              --resource-group $RESOURCE_GROUP \
-              --template-file infra/main.bicep \
-              --parameters @parameters.json
+          azcliversion: 2.60.0
+
+      - name: Azure login with OIDC (validation)
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+
+      - name: Validate Bicep file syntax
+        run: |
+          az bicep build --file $BICEP_FILE
+
+      - name: What-if deployment (validation)
+        run: |
+          az deployment group what-if \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file "$BICEP_FILE" \
+            --parameters \
+              environment="dev" \
+              location="$AZURE_LOCATION" \
+            --no-pretty-print
 
   deploy:
     name: Deploy to Azure
     needs: validate
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
+    environment:
+      name: production
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Deploy Bicep to resource group
+      - name: Set up Azure CLI
         uses: azure/cli@v2
         with:
-          inlineScript: |
-            set -e
-            az bicep install
-            az bicep build --file infra/main.bicep
-            az deployment group create --resource-group my-rg --template-file infra/main.bicep --parameters @parameters.json
+          azcliversion: 2.60.0
+
+      - name: Azure login with OIDC (deployment)
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+
+      - name: Ensure resource group exists
+        run: |
+          az group create \
+            --name "$AZURE_RESOURCE_GROUP" \
+            --location "$AZURE_LOCATION"
+
+      - name: Deploy Bicep to resource group
+        run: |
+          az deployment group create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file "$BICEP_FILE" \
+            --parameters \
+              environment="prod" \
+              location="$AZURE_LOCATION" \
+            --only-show-errors
+
+      - name: Output deployment summary
+        run: |
+          echo "Deployment to resource group '$AZURE_RESOURCE_GROUP' in '$AZURE_LOCATION' completed."
